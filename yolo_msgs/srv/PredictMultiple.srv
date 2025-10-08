@@ -1,0 +1,3 @@
+sensor_msgs/Image[] images
+---
+yolo_msgs/DetectionArray[] detections
