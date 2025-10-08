@@ -43,7 +43,7 @@ from yolo_msgs.msg import KeyPoint2DArray
 from yolo_msgs.msg import Detection
 from yolo_msgs.msg import DetectionArray
 from yolo_msgs.srv import SetClasses
-
+from yolo_msgs.srv import PredictSingle, PredictMultiple
 
 class YoloNode(LifecycleNode):
 
@@ -51,6 +51,7 @@ class YoloNode(LifecycleNode):
         super().__init__("yolo_node")
 
         # params
+        self.declare_parameter("as_server", True)
         self.declare_parameter("model_type", "YOLO")
         self.declare_parameter("model", "yolov8m.pt")
         self.declare_parameter("device", "cuda:0")
@@ -72,7 +73,10 @@ class YoloNode(LifecycleNode):
 
     def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
         self.get_logger().info(f"[{self.get_name()}] Configuring...")
-
+        self.as_server = (
+            self.get_parameter("as_server").get_parameter_value().bool_value
+        )
+        self.get_logger().info(f"Running as server: {self.as_server}")
         # model params
         self.model_type = (
             self.get_parameter("model_type").get_parameter_value().string_value
@@ -154,6 +158,16 @@ class YoloNode(LifecycleNode):
             Image, "image_raw", self.image_cb, self.image_qos_profile
         )
 
+        # PredictSingle service server
+        self._predict_single_srv = self.create_service(
+            PredictSingle, "yolo/predict_single", self.predict_single_cb
+        )
+
+        # PredictMultiple service server
+        self._predict_multiple_srv = self.create_service(
+            PredictMultiple, "yolo/predict_multiple", self.predict_multiple_cb
+        )
+
         super().on_activate(state)
         self.get_logger().info(f"[{self.get_name()}] Activated")
 
@@ -173,6 +187,100 @@ class YoloNode(LifecycleNode):
         if isinstance(self.yolo, YOLOWorld):
             self.destroy_service(self._set_classes_srv)
             self._set_classes_srv = None
+
+            self.destroy_service(self._predict_single_srv)
+            self._predict_single_srv = None
+
+            self.destroy_service(self._predict_multiple_srv)
+            self._predict_multiple_srv = None
+
+    def predict_multiple_cb(self, request: PredictMultiple.Request, response: PredictMultiple.Response) -> PredictMultiple.Response:
+        # バッチ画像推論
+        cv_images = [self.cv_bridge.imgmsg_to_cv2(img, desired_encoding=self.yolo_encoding) for img in request.images]
+        results_list = self.yolo.predict(
+            source=cv_images,
+            verbose=False,
+            stream=False,
+            conf=self.threshold,
+            iou=self.iou,
+            imgsz=(self.imgsz_height, self.imgsz_width),
+            half=self.half,
+            max_det=self.max_det,
+            augment=self.augment,
+            agnostic_nms=self.agnostic_nms,
+            retina_masks=self.retina_masks,
+            device=self.device,
+        )
+
+        detections_array = []
+        for img, results in zip(request.images, results_list):
+            results = results.cpu()
+            detections_msg = DetectionArray()
+            hypothesis = self.parse_hypothesis(results) if (results.boxes or results.obb) else []
+            boxes = self.parse_boxes(results) if (results.boxes or results.obb) else []
+            masks = self.parse_masks(results) if results.masks else []
+            keypoints = self.parse_keypoints(results) if results.keypoints else []
+
+            for i in range(len(results)):
+                aux_msg = Detection()
+                if (results.boxes or results.obb) and hypothesis and boxes:
+                    aux_msg.class_id = hypothesis[i]["class_id"]
+                    aux_msg.class_name = hypothesis[i]["class_name"]
+                    aux_msg.score = hypothesis[i]["score"]
+                    aux_msg.bbox = boxes[i]
+                if results.masks and masks:
+                    aux_msg.mask = masks[i]
+                if results.keypoints and keypoints:
+                    aux_msg.keypoints = keypoints[i]
+                detections_msg.detections.append(aux_msg)
+
+            detections_msg.header = img.header
+            detections_array.append(detections_msg)
+
+        response.detections = detections_array
+        return response
+
+    def predict_single_cb(self, request: PredictSingle.Request, response: PredictSingle.Response) -> PredictSingle.Response:
+        # 画像をcv2に変換
+        cv_image = self.cv_bridge.imgmsg_to_cv2(request.image, desired_encoding=self.yolo_encoding)
+        results = self.yolo.predict(
+            source=cv_image,
+            verbose=False,
+            stream=False,
+            conf=self.threshold,
+            iou=self.iou,
+            imgsz=(self.imgsz_height, self.imgsz_width),
+            half=self.half,
+            max_det=self.max_det,
+            augment=self.augment,
+            agnostic_nms=self.agnostic_nms,
+            retina_masks=self.retina_masks,
+            device=self.device,
+        )
+        results: Results = results[0].cpu()
+
+        detections_msg = DetectionArray()
+        hypothesis = self.parse_hypothesis(results) if (results.boxes or results.obb) else []
+        boxes = self.parse_boxes(results) if (results.boxes or results.obb) else []
+        masks = self.parse_masks(results) if results.masks else []
+        keypoints = self.parse_keypoints(results) if results.keypoints else []
+
+        for i in range(len(results)):
+            aux_msg = Detection()
+            if (results.boxes or results.obb) and hypothesis and boxes:
+                aux_msg.class_id = hypothesis[i]["class_id"]
+                aux_msg.class_name = hypothesis[i]["class_name"]
+                aux_msg.score = hypothesis[i]["score"]
+                aux_msg.bbox = boxes[i]
+            if results.masks and masks:
+                aux_msg.mask = masks[i]
+            if results.keypoints and keypoints:
+                aux_msg.keypoints = keypoints[i]
+            detections_msg.detections.append(aux_msg)
+
+        detections_msg.header = request.image.header
+        response.detections = detections_msg
+        return response
 
         self.destroy_subscription(self._sub)
         self._sub = None
