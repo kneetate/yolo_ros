@@ -36,6 +36,13 @@ def generate_launch_description():
             description="Model type form Ultralytics (YOLO, World, YOLOE)",
         )
 
+        as_server = LaunchConfiguration("as_server")
+        as_server_cmd = DeclareLaunchArgument(
+            "as_server",
+            default_value="False",
+            description="Whether to run as a server",
+        )
+
         model = LaunchConfiguration("model")
         model_cmd = DeclareLaunchArgument(
             "model",
@@ -233,6 +240,7 @@ def generate_launch_description():
             namespace=namespace,
             parameters=[
                 {
+                    "as_server": as_server,
                     "model_type": model_type,
                     "model": model,
                     "device": device,
@@ -299,6 +307,7 @@ def generate_launch_description():
         )
 
         return (
+            as_server_cmd,
             model_type_cmd,
             model_cmd,
             tracker_cmd,

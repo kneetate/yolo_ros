@@ -51,7 +51,7 @@ class YoloNode(LifecycleNode):
         super().__init__("yolo_node")
 
         # params
-        self.declare_parameter("as_server", True)
+        self.declare_parameter("as_server", False)
         self.declare_parameter("model_type", "YOLO")
         self.declare_parameter("model", "yolov8m.pt")
         self.declare_parameter("device", "cuda:0")
@@ -154,19 +154,26 @@ class YoloNode(LifecycleNode):
                 SetClasses, "set_classes", self.set_classes_cb
             )
 
-        self._sub = self.create_subscription(
-            Image, "image_raw", self.image_cb, self.image_qos_profile
-        )
+        if self.as_server:
+            # PredictSingle service server
+            self._predict_single_srv = self.create_service(
+                PredictSingle, "yolo/predict_single", self.predict_single_cb
+            )
 
-        # PredictSingle service server
-        self._predict_single_srv = self.create_service(
-            PredictSingle, "yolo/predict_single", self.predict_single_cb
-        )
-
-        # PredictMultiple service server
-        self._predict_multiple_srv = self.create_service(
-            PredictMultiple, "yolo/predict_multiple", self.predict_multiple_cb
-        )
+            # PredictMultiple service server
+            self._predict_multiple_srv = self.create_service(
+                PredictMultiple, "yolo/predict_multiple", self.predict_multiple_cb
+            )
+            self.get_logger().info("Running as server, services ready")
+        else:
+            # image subscription
+            self._sub = self.create_subscription(
+                Image,
+                "image",
+                self.image_cb,
+                self.image_qos_profile,
+            )
+            self.get_logger().info("Running as client, subscription ready")
 
         super().on_activate(state)
         self.get_logger().info(f"[{self.get_name()}] Activated")
