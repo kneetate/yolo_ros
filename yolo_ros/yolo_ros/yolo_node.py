@@ -138,7 +138,6 @@ class YoloNode(LifecycleNode):
         except FileNotFoundError:
             self.get_logger().error(f"Model file '{self.model}' does not exists")
             return TransitionCallbackReturn.ERROR
-
         # YOLOE does not support fusing
         if isinstance(self.yolo, YOLO) or isinstance(self.yolo, YOLOWorld):
             try:
@@ -146,6 +145,14 @@ class YoloNode(LifecycleNode):
                 self.yolo.fuse()
             except TypeError as e:
                 self.get_logger().warn(f"Error while fuse: {e}")
+
+        # warm up model
+        for _ in range(100):
+            self.yolo.predict(
+                source=torch.zeros(1, 3, 640, 640),
+                device=self.device,
+            )
+            self.get_logger().info("Warming up model...")
 
         self._enable_srv = self.create_service(SetBool, "enable", self.enable_cb)
 
