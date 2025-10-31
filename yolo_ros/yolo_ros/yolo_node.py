@@ -68,6 +68,8 @@ class YoloNode(LifecycleNode):
         self.declare_parameter("augment", False)
         self.declare_parameter("agnostic_nms", False)
         self.declare_parameter("retina_masks", False)
+        self.declare_parameter("rect", True)
+        self.declare_parameter("save_results", True)
 
         self.type_to_model = {"YOLO": YOLO, "World": YOLOWorld, "YOLOE": YOLOE}
 
@@ -106,6 +108,10 @@ class YoloNode(LifecycleNode):
         )
         self.retina_masks = (
             self.get_parameter("retina_masks").get_parameter_value().bool_value
+        )
+        self.rect = self.get_parameter("rect").get_parameter_value().bool_value
+        self.save_results = (
+            self.get_parameter("save_results").get_parameter_value().bool_value
         )
 
         # ros params
@@ -224,9 +230,11 @@ class YoloNode(LifecycleNode):
             agnostic_nms=self.agnostic_nms,
             retina_masks=self.retina_masks,
             device=self.device,
+            rect=self.rect,
         )
 
         detections_array = []
+        counter = 0
         for img, results in zip(request.images, results_list):
             results = results.cpu()
             detections_msg = DetectionArray()
@@ -247,7 +255,8 @@ class YoloNode(LifecycleNode):
                 if results.keypoints and keypoints:
                     aux_msg.keypoints = keypoints[i]
                 detections_msg.detections.append(aux_msg)
-
+            results.save(filename=f"result_multi_{counter}.jpg")  # save to disk
+            counter += 1
             detections_msg.header = img.header
             detections_array.append(detections_msg)
 
@@ -270,6 +279,7 @@ class YoloNode(LifecycleNode):
             agnostic_nms=self.agnostic_nms,
             retina_masks=self.retina_masks,
             device=self.device,
+            rect=self.rect,
         )
         results: Results = results[0].cpu()
 
@@ -278,6 +288,7 @@ class YoloNode(LifecycleNode):
         boxes = self.parse_boxes(results) if (results.boxes or results.obb) else []
         masks = self.parse_masks(results) if results.masks else []
         keypoints = self.parse_keypoints(results) if results.keypoints else []
+        results.save(filename="result_single.jpg")  # save to disk
 
         for i in range(len(results)):
             aux_msg = Detection()
@@ -468,6 +479,7 @@ class YoloNode(LifecycleNode):
                 agnostic_nms=self.agnostic_nms,
                 retina_masks=self.retina_masks,
                 device=self.device,
+                rect=self.rect,
             )
             results: Results = results[0].cpu()
 
