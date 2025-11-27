@@ -217,6 +217,8 @@ class YoloNode(LifecycleNode):
     def predict_multiple_cb(self, request: PredictMultiple.Request, response: PredictMultiple.Response) -> PredictMultiple.Response:
         # バッチ画像推論
         cv_images = [self.cv_bridge.imgmsg_to_cv2(img, desired_encoding=self.yolo_encoding) for img in request.images]
+        if not cv_images:
+            return response
         results_list = self.yolo.predict(
             source=cv_images,
             verbose=False,
