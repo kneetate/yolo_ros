@@ -19,8 +19,12 @@ find_package(std_srvs REQUIRED)
 add_executable(yolo_ros_examples_node src/main.cpp)
 ament_target_dependencies(yolo_ros_examples_node rclcpp yolo_msgs cv_bridge sensor_msgs std_msgs yolo_ros_utils OpenCV std_srvs)
 
+add_executable(yolo_seg_clustering src/segmentation.cpp)
+ament_target_dependencies(yolo_seg_clustering rclcpp yolo_msgs cv_bridge sensor_msgs std_msgs yolo_ros_utils OpenCV std_srvs)
+
 install(TARGETS
   yolo_ros_examples_node
+  yolo_seg_clustering
   DESTINATION lib/${PROJECT_NAME}
 )
 

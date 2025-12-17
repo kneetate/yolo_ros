@@ -15,7 +15,10 @@
 
 
 from typing import List, Dict
+
+import cv2
 from cv_bridge import CvBridge
+import numpy as np
 
 import rclpy
 from rclpy.qos import QoSProfile
@@ -70,6 +73,7 @@ class YoloNode(LifecycleNode):
         self.declare_parameter("retina_masks", False)
         self.declare_parameter("rect", True)
         self.declare_parameter("save_results", True)
+        self.declare_parameter("split_masks_enabled", True)
 
         self.type_to_model = {"YOLO": YOLO, "World": YOLOWorld, "YOLOE": YOLOE}
 
@@ -112,6 +116,9 @@ class YoloNode(LifecycleNode):
         self.rect = self.get_parameter("rect").get_parameter_value().bool_value
         self.save_results = (
             self.get_parameter("save_results").get_parameter_value().bool_value
+        )
+        self.split_masks_enabled = (
+            self.get_parameter("split_masks_enabled").get_parameter_value().bool_value
         )
 
         # ros params
@@ -240,9 +247,9 @@ class YoloNode(LifecycleNode):
         for img, results in zip(request.images, results_list):
             results = results.cpu()
             detections_msg = DetectionArray()
+            masks = self.parse_masks(results) if results.masks else []
             hypothesis = self.parse_hypothesis(results) if (results.boxes or results.obb) else []
             boxes = self.parse_boxes(results) if (results.boxes or results.obb) else []
-            masks = self.parse_masks(results) if results.masks else []
             keypoints = self.parse_keypoints(results) if results.keypoints else []
 
             for i in range(len(results)):
@@ -286,11 +293,11 @@ class YoloNode(LifecycleNode):
         results: Results = results[0].cpu()
 
         detections_msg = DetectionArray()
+        masks = self.parse_masks(results) if results.masks else []
         hypothesis = self.parse_hypothesis(results) if (results.boxes or results.obb) else []
         boxes = self.parse_boxes(results) if (results.boxes or results.obb) else []
-        masks = self.parse_masks(results) if results.masks else []
         keypoints = self.parse_keypoints(results) if results.keypoints else []
-        results.save(filename="result_single.jpg")  # save to disk
+        # results.save(filename="result_single.jpg")  # save to disk
 
         for i in range(len(results)):
             aux_msg = Detection()
@@ -405,7 +412,57 @@ class YoloNode(LifecycleNode):
                 boxes_list.append(msg)
 
         return boxes_list
+    
+    
 
+    def split_masks(self, results: Results) -> Results:
+        
+        if results.masks is None or results.boxes is None:
+            return results
+
+        device = results.masks.data.device
+        orig_shape = results.masks.orig_shape
+
+        new_masks = []
+        new_boxes_data = []
+
+        # boxes.data shape: (N, 6 or 7)
+        for i in range(len(results.masks.data)):
+            mask = results.masks.data[i]
+            binary = (mask.cpu().numpy() > 0.5).astype(np.uint8)
+
+            num_labels, labels = cv2.connectedComponents(binary)
+
+            box_data = results.boxes.data[i]
+
+            for label in range(1, num_labels):
+                component = (labels == label).astype(np.uint8)
+
+                if component.sum() == 0:
+                    continue
+
+                new_masks.append(component)
+                new_boxes_data.append(box_data.clone())
+
+        # no split happened
+        if len(new_masks) == len(results.masks.data):
+            return results
+
+        if len(new_masks) == 0:
+            return results
+
+        # rebuild tensors
+        new_masks = torch.from_numpy(
+            np.stack(new_masks, axis=0)
+        ).to(device).float()
+
+        new_boxes_data = torch.stack(new_boxes_data).to(device)
+
+        # rebuild Results
+        results.masks = Masks(new_masks, orig_shape)
+        results.boxes = Boxes(new_boxes_data, orig_shape=orig_shape)
+
+        return results
     def parse_masks(self, results: Results) -> List[Mask]:
 
         masks_list = []
@@ -415,7 +472,8 @@ class YoloNode(LifecycleNode):
             p.x = x
             p.y = y
             return p
-
+        if self.split_masks_enabled:
+            results = self.split_masks(results)
         mask: Masks
         for mask in results.masks:
 
